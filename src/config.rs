@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use crate::error::Result;
 
+/// Language used for Keyword Planner requests when nothing overrides it.
+pub const DEFAULT_KEYWORD_PLAN_LANGUAGE: &str = "en";
+
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {
@@ -63,11 +66,31 @@ impl Default for GoogleConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AdsConfig {
     pub developer_token: String,
     pub customer_id: String,
     pub login_customer_id: Option<String>,
+    /// Default Keyword Planner language: an ISO code (`pt`, `es`, `zh_CN`) or a
+    /// raw language constant ID (`1014`). Keyword Planner returns almost no
+    /// expansion ideas when this does not match the language the seed keywords
+    /// are written in, so the default is only correct for English accounts.
+    pub keyword_plan_language: String,
+    /// Default Keyword Planner geo target constant IDs (e.g. `2076` = Brazil).
+    /// Empty means worldwide volumes.
+    pub keyword_plan_geo_targets: Vec<String>,
+}
+
+impl Default for AdsConfig {
+    fn default() -> Self {
+        Self {
+            developer_token: String::new(),
+            customer_id: String::new(),
+            login_customer_id: None,
+            keyword_plan_language: DEFAULT_KEYWORD_PLAN_LANGUAGE.to_string(),
+            keyword_plan_geo_targets: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +133,8 @@ impl Config {
     /// | `GOOGLE_ADS_DEVELOPER_TOKEN` | (empty) |
     /// | `GOOGLE_ADS_CUSTOMER_ID` | (empty) |
     /// | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | (none) |
+    /// | `GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE` | `en` |
+    /// | `GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS` | (empty, comma-separated) |
     /// | `GOOGLE_ADS_MAX_DAILY_BUDGET` | `50.0` |
     /// | `GOOGLE_ADS_MAX_BID_INCREASE_PCT` | `100` |
     /// | `GOOGLE_ADS_REQUIRE_DRY_RUN` | `true` |
@@ -133,6 +158,11 @@ impl Config {
                 developer_token: env_or("GOOGLE_ADS_DEVELOPER_TOKEN", ""),
                 customer_id: env_or("GOOGLE_ADS_CUSTOMER_ID", ""),
                 login_customer_id,
+                keyword_plan_language: env_or(
+                    "GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE",
+                    DEFAULT_KEYWORD_PLAN_LANGUAGE,
+                ),
+                keyword_plan_geo_targets: env_list("GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS"),
             },
             safety: SafetyConfig {
                 max_daily_budget: env_f64_or("GOOGLE_ADS_MAX_DAILY_BUDGET", 50.0),

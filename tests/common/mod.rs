@@ -23,6 +23,7 @@ pub fn test_config() -> Config {
             developer_token: "test-developer-token".to_string(),
             customer_id: "1234567890".to_string(),
             login_customer_id: None,
+            ..Default::default()
         },
         safety: mcp_google_ads::config::SafetyConfig {
             max_daily_budget: 10_000.0,

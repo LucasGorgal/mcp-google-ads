@@ -293,10 +293,16 @@ impl GoogleAdsClient {
     }
 
     /// Call the Keyword Planner generateKeywordIdeas endpoint.
+    ///
+    /// `language_id` is a bare language constant ID (`1014` = Portuguese) and
+    /// `geo_target_ids` are bare geo target constant IDs (`2076` = Brazil); an
+    /// empty geo list means worldwide volumes.
     pub async fn generate_keyword_ideas(
         &self,
         customer_id: &str,
         seed_keywords: Vec<String>,
+        language_id: &str,
+        geo_target_ids: &[String],
         page_size: Option<u32>,
     ) -> Result<Vec<serde_json::Value>> {
         let normalized_id = Self::normalize_customer_id(customer_id);
@@ -304,22 +310,67 @@ impl GoogleAdsClient {
             "{}/customers/{}:generateKeywordIdeas",
             self.base_url, normalized_id
         );
-        let headers = self.build_headers().await?;
 
         let body = serde_json::json!({
             "keywordSeed": {
                 "keywords": seed_keywords
             },
-            "language": "languageConstants/1000",
+            "language": format!("languageConstants/{}", language_id),
+            "geoTargetConstants": Self::geo_target_resource_names(geo_target_ids),
             "pageSize": page_size.unwrap_or(50),
             "keywordPlanNetwork": "GOOGLE_SEARCH"
         });
 
+        self.post_keyword_plan_request(&url, &body).await
+    }
+
+    /// Call the Keyword Planner generateKeywordHistoricalMetrics endpoint.
+    ///
+    /// Unlike a `keyword_view` report this reads Google's own keyword database,
+    /// so it returns volumes for keywords that have never run in the account.
+    pub async fn generate_keyword_historical_metrics(
+        &self,
+        customer_id: &str,
+        keywords: Vec<String>,
+        language_id: &str,
+        geo_target_ids: &[String],
+    ) -> Result<Vec<serde_json::Value>> {
+        let normalized_id = Self::normalize_customer_id(customer_id);
+        let url = format!(
+            "{}/customers/{}:generateKeywordHistoricalMetrics",
+            self.base_url, normalized_id
+        );
+
+        let body = serde_json::json!({
+            "keywords": keywords,
+            "language": format!("languageConstants/{}", language_id),
+            "geoTargetConstants": Self::geo_target_resource_names(geo_target_ids),
+            "keywordPlanNetwork": "GOOGLE_SEARCH"
+        });
+
+        self.post_keyword_plan_request(&url, &body).await
+    }
+
+    fn geo_target_resource_names(geo_target_ids: &[String]) -> Vec<String> {
+        geo_target_ids
+            .iter()
+            .map(|id| format!("geoTargetConstants/{}", id))
+            .collect()
+    }
+
+    /// POST a Keyword Planner request and return its `results` array.
+    async fn post_keyword_plan_request(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>> {
+        let headers = self.build_headers().await?;
+
         let response = self
             .http
-            .post(&url)
+            .post(url)
             .headers(headers)
-            .json(&body)
+            .json(body)
             .send()
             .await?;
 

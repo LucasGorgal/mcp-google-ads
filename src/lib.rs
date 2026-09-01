@@ -447,6 +447,19 @@ pub struct DiscoverKeywordsToolParams {
     pub customer_id: Option<String>,
     /// Seed keywords to generate ideas from.
     pub seed_keywords: Vec<String>,
+    /// Language of the seed keywords: ISO code ("pt", "es", "zh_CN") or a
+    /// language constant ID ("1014"). Must match the language the seeds are
+    /// written in or Keyword Planner returns almost no ideas. Defaults to
+    /// GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE.
+    pub language: Option<String>,
+    /// Geo target constant IDs to scope search volumes to (e.g. ["2076"] for
+    /// Brazil) — use search_geo_targets to find them. Defaults to
+    /// GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS; empty means worldwide.
+    pub geo_target_ids: Option<Vec<String>>,
+    /// Maximum number of ideas to return (default 50).
+    pub page_size: Option<u32>,
+    /// Include the 12-month search volume trend per keyword (verbose).
+    pub include_monthly_trend: Option<bool>,
 }
 
 /// Parameters for keyword forecasts.
@@ -456,6 +469,15 @@ pub struct KeywordForecastsToolParams {
     pub customer_id: Option<String>,
     /// Keywords to get forecasts for.
     pub keyword_texts: Vec<String>,
+    /// Language of the keywords: ISO code ("pt", "es", "zh_CN") or a language
+    /// constant ID ("1014"). Defaults to GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE.
+    pub language: Option<String>,
+    /// Geo target constant IDs to scope search volumes to (e.g. ["2076"] for
+    /// Brazil). Defaults to GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS; empty means
+    /// worldwide.
+    pub geo_target_ids: Option<Vec<String>>,
+    /// Include the 12-month search volume trend per keyword (verbose).
+    pub include_monthly_trend: Option<bool>,
 }
 
 // ── Phase 5 parameter structs ────────────────────────────────────────
@@ -651,6 +673,18 @@ impl GoogleAdsMcp {
                 "found"
             } else {
                 "not found"
+            }
+        ));
+        status.push(format!(
+            "Keyword Planner language: {}",
+            self.config.ads.keyword_plan_language
+        ));
+        status.push(format!(
+            "Keyword Planner geo targets: {}",
+            if self.config.ads.keyword_plan_geo_targets.is_empty() {
+                "worldwide".to_string()
+            } else {
+                self.config.ads.keyword_plan_geo_targets.join(", ")
             }
         ));
         status.push(format!(
@@ -1801,26 +1835,58 @@ impl GoogleAdsMcp {
 
     // ── Keyword Planner ─────────────────────────────────────────────────
 
-    #[tool(description = "Discover keyword ideas from seed keywords using the Keyword Planner.")]
+    #[tool(
+        description = "Discover keyword ideas from seed keywords using the Keyword Planner. Pass \
+                       `language` matching the seed keywords (e.g. \"pt\") and `geo_target_ids` \
+                       for the target market, otherwise volumes are worldwide and few ideas come \
+                       back."
+    )]
     async fn discover_keywords(
         &self,
         Parameters(params): Parameters<DiscoverKeywordsToolParams>,
     ) -> String {
         let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let language = self.resolve_keyword_plan_language(params.language);
+        let geo_targets = self.resolve_keyword_plan_geo_targets(params.geo_target_ids);
+        let include_trend = params.include_monthly_trend.unwrap_or(false);
         self.run_tool(|client| async move {
-            tools::keyword_planner::discover_keywords(&client, &cid, params.seed_keywords).await
+            tools::keyword_planner::discover_keywords(
+                &client,
+                &cid,
+                params.seed_keywords,
+                &language,
+                &geo_targets,
+                params.page_size,
+                include_trend,
+            )
+            .await
         })
         .await
     }
 
-    #[tool(description = "Get historical keyword performance metrics for forecasting.")]
+    #[tool(
+        description = "Get Keyword Planner search volume, competition and top-of-page bid range \
+                       for specific keywords. Works for keywords that have never run in the \
+                       account."
+    )]
     async fn get_keyword_forecasts(
         &self,
         Parameters(params): Parameters<KeywordForecastsToolParams>,
     ) -> String {
         let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let language = self.resolve_keyword_plan_language(params.language);
+        let geo_targets = self.resolve_keyword_plan_geo_targets(params.geo_target_ids);
+        let include_trend = params.include_monthly_trend.unwrap_or(false);
         self.run_tool(|client| async move {
-            tools::keyword_planner::get_keyword_forecasts(&client, &cid, params.keyword_texts).await
+            tools::keyword_planner::get_keyword_forecasts(
+                &client,
+                &cid,
+                params.keyword_texts,
+                &language,
+                &geo_targets,
+                include_trend,
+            )
+            .await
         })
         .await
     }
@@ -2044,6 +2110,21 @@ impl GoogleAdsMcp {
         customer_id
             .map(|s| s.to_string())
             .unwrap_or_else(|| self.config.ads.customer_id.clone())
+    }
+
+    /// Per-call Keyword Planner language, falling back to the configured default.
+    fn resolve_keyword_plan_language(&self, language: Option<String>) -> String {
+        language
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| self.config.ads.keyword_plan_language.clone())
+    }
+
+    /// Per-call Keyword Planner geo targets, falling back to the configured
+    /// defaults. An explicit empty list means "worldwide", so it is honoured
+    /// rather than replaced by the default.
+    fn resolve_keyword_plan_geo_targets(&self, geo_target_ids: Option<Vec<String>>) -> Vec<String> {
+        geo_target_ids.unwrap_or_else(|| self.config.ads.keyword_plan_geo_targets.clone())
     }
 
     /// For MCC queries: use login_customer_id if configured, otherwise customer_id.
