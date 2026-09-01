@@ -12,6 +12,39 @@ use crate::safety::preview::{store_plan, ChangePlan};
 /// longer is a malformed input rather than a real location.
 const MAX_GEO_TARGET_ID_LEN: usize = 12;
 
+/// Strip diacritics from a search term, mapping accented Latin letters to their
+/// ASCII base (`São` -> `Sao`, `Ceará` -> `Ceara`, `Zürich` -> `Zurich`).
+///
+/// Google stores every `geo_target_constant.name` unaccented — verified live:
+/// `LIKE '%ã%'` and `LIKE '%é%'` both match zero rows across the whole table —
+/// so an accented search term can never match anything. Since the stored names
+/// are pure ASCII this is a safe one-way normalization; there is no accented
+/// row that stripping could hide.
+fn deaccent(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => 'a',
+            'Á' | 'À' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' => 'A',
+            'é' | 'è' | 'ê' | 'ë' | 'ē' => 'e',
+            'É' | 'È' | 'Ê' | 'Ë' | 'Ē' => 'E',
+            'í' | 'ì' | 'î' | 'ï' | 'ī' => 'i',
+            'Í' | 'Ì' | 'Î' | 'Ï' | 'Ī' => 'I',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => 'o',
+            'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' => 'O',
+            'ú' | 'ù' | 'û' | 'ü' | 'ū' => 'u',
+            'Ú' | 'Ù' | 'Û' | 'Ü' | 'Ū' => 'U',
+            'ç' => 'c',
+            'Ç' => 'C',
+            'ñ' => 'n',
+            'Ñ' => 'N',
+            'ý' | 'ÿ' => 'y',
+            'Ý' => 'Y',
+            other => other,
+        })
+        .collect()
+}
+
 /// Search for geo target constants by name.
 ///
 /// Useful for finding location IDs for geo-targeting campaigns.
@@ -20,6 +53,15 @@ pub async fn search_geo_targets(
     customer_id: &str,
     query: &str,
 ) -> Result<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err(McpGoogleAdsError::Validation(
+            "Location search query is empty. Pass a place name, e.g. \"Fortaleza\".".to_string(),
+        ));
+    }
+
+    let normalized = deaccent(trimmed);
+
     let gaql_query = format!(
         "SELECT \
             geo_target_constant.id, \
@@ -29,15 +71,26 @@ pub async fn search_geo_targets(
             geo_target_constant.target_type \
         FROM geo_target_constant \
         WHERE geo_target_constant.name LIKE '%{}%'",
-        query.replace('\'', "\\'")
+        normalized.replace('\'', "\\'")
     );
 
     let rows = client.search(customer_id, &gaql_query).await?;
 
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "geo_targets": rows,
         "total_count": rows.len(),
     });
+
+    // Surface the normalization so a caller who searched "São Paulo" can see
+    // that "Sao Paulo" is what actually went to the API.
+    if normalized != trimmed {
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert(
+                "searched_as".to_string(),
+                serde_json::Value::String(normalized),
+            );
+        }
+    }
 
     serde_json::to_string_pretty(&result).map_err(Into::into)
 }
@@ -385,5 +438,31 @@ mod tests {
         let err = remove_geo_target(&config, "1234567890", "111", "2276")
             .expect_err("blocked operation rejected");
         assert!(err.to_string().contains("blocked"));
+    }
+
+    #[test]
+    fn test_deaccent_strips_portuguese_diacritics() {
+        assert_eq!(deaccent("São Benedito"), "Sao Benedito");
+        assert_eq!(deaccent("Ceará"), "Ceara");
+        assert_eq!(deaccent("Goiânia"), "Goiania");
+        assert_eq!(deaccent("Brasília"), "Brasilia");
+        assert_eq!(deaccent("Maceió"), "Maceio");
+        assert_eq!(deaccent("Açores"), "Acores");
+    }
+
+    #[test]
+    fn test_deaccent_covers_other_latin_scripts() {
+        assert_eq!(deaccent("Zürich"), "Zurich");
+        assert_eq!(deaccent("Málaga"), "Malaga");
+        assert_eq!(deaccent("Orléans"), "Orleans");
+        assert_eq!(deaccent("España"), "Espana");
+        assert_eq!(deaccent("Ålesund"), "Alesund");
+    }
+
+    #[test]
+    fn test_deaccent_leaves_ascii_untouched() {
+        assert_eq!(deaccent("Fortaleza"), "Fortaleza");
+        assert_eq!(deaccent("New York"), "New York");
+        assert_eq!(deaccent(""), "");
     }
 }

@@ -115,6 +115,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `search_geo_targets` no longer returns nothing for accented place names.
+  The query went into a `LIKE` clause verbatim, and Google stores every
+  `geo_target_constant.name` unaccented, so `São Benedito` and `Ceará` each
+  matched zero rows while the locations plainly exist — making the tool unusable
+  for Brazilian, Spanish, French and German locations, i.e. exactly the accounts
+  this MCC runs. Search terms are now stripped of diacritics before the query,
+  and the normalized form is echoed back as `searched_as` so the caller can see
+  what was actually searched. Verified that the stored names are pure ASCII
+  (`LIKE '%ã%'` and `LIKE '%é%'` match zero rows table-wide), so stripping cannot
+  hide an accented row. An empty query is now rejected instead of expanding to
+  `LIKE '%%'` and returning the entire table.
+
 - Keyword Planner is no longer hardwired to English and worldwide volumes.
   `discover_keywords` sent `languageConstants/1000` on every request and never
   sent a geo target at all. Keyword Planner matches ideas against the requested
