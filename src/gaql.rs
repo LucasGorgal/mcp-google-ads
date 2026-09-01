@@ -21,14 +21,50 @@ pub fn parse_select_fields(query: &str) -> Vec<String> {
         .collect()
 }
 
+/// Convert one snake_case GAQL path segment to the camelCase key the REST API
+/// actually returns: `advertising_channel_type` -> `advertisingChannelType`.
+///
+/// Returns `None` for segments with no underscore, where the two spellings are
+/// identical and a second lookup would be wasted.
+fn snake_to_camel(segment: &str) -> Option<String> {
+    if !segment.contains('_') {
+        return None;
+    }
+
+    let mut out = String::with_capacity(segment.len());
+    let mut capitalize_next = false;
+    for ch in segment.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            out.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    Some(out)
+}
+
 /// Resolve a dotted field path in a JSON value.
 /// For example, "campaign.name" in {"campaign": {"name": "My Campaign"}} -> "My Campaign"
+///
+/// GAQL names fields in snake_case but the REST API returns them in camelCase,
+/// so every multi-word segment is tried in both spellings. Looking up only the
+/// literal path silently yields an empty cell for fields like
+/// `geo_target_constant.canonical_name` — a blank column reads as "no data"
+/// rather than as a lookup miss.
 fn resolve_field(row: &serde_json::Value, field: &str) -> String {
     let parts: Vec<&str> = field.split('.').collect();
     let mut current = row;
 
     for part in &parts {
-        match current.get(part) {
+        let camel = snake_to_camel(part);
+        let next = match current.get(part) {
+            Some(v) => Some(v),
+            None => camel.as_deref().and_then(|c| current.get(c)),
+        };
+        match next {
             Some(v) => current = v,
             None => return String::new(),
         }
@@ -374,5 +410,84 @@ mod tests {
         let csv = format_csv(&rows, &fields);
         // Double quotes should be escaped as ""
         assert!(csv.contains("\"Say \"\"hello\"\"\""));
+    }
+
+    #[test]
+    fn test_snake_to_camel() {
+        assert_eq!(
+            snake_to_camel("advertising_channel_type").as_deref(),
+            Some("advertisingChannelType")
+        );
+        assert_eq!(snake_to_camel("cost_micros").as_deref(), Some("costMicros"));
+        assert_eq!(
+            snake_to_camel("geo_target_constant").as_deref(),
+            Some("geoTargetConstant")
+        );
+        // No underscore: both spellings are identical, so no second lookup.
+        assert_eq!(snake_to_camel("campaign"), None);
+        assert_eq!(snake_to_camel("id"), None);
+    }
+
+    #[test]
+    fn test_resolve_field_handles_camel_case_api_keys() {
+        // GAQL asks for snake_case; the REST API answers in camelCase.
+        let row = serde_json::json!({
+            "geoTargetConstant": {
+                "id": "9047813",
+                "name": "Sao Benedito",
+                "canonicalName": "Sao Benedito,Ceara,Brazil",
+                "targetType": "City"
+            }
+        });
+        assert_eq!(resolve_field(&row, "geo_target_constant.id"), "9047813");
+        assert_eq!(
+            resolve_field(&row, "geo_target_constant.canonical_name"),
+            "Sao Benedito,Ceara,Brazil"
+        );
+        assert_eq!(
+            resolve_field(&row, "geo_target_constant.target_type"),
+            "City"
+        );
+        // A genuinely absent field still resolves to empty.
+        assert_eq!(resolve_field(&row, "geo_target_constant.country_code"), "");
+    }
+
+    #[test]
+    fn test_resolve_field_prefers_literal_snake_case_key() {
+        // If the API ever answers in snake_case, the literal key still wins.
+        let row = serde_json::json!({"campaign": {"advertising_channel_type": "SEARCH"}});
+        assert_eq!(
+            resolve_field(&row, "campaign.advertising_channel_type"),
+            "SEARCH"
+        );
+    }
+
+    #[test]
+    fn test_format_table_renders_multi_word_fields() {
+        let rows = vec![serde_json::json!({
+            "campaign": {"id": "23945180054", "advertisingChannelType": "SMART"}
+        })];
+        let fields = vec![
+            "campaign.id".to_string(),
+            "campaign.advertising_channel_type".to_string(),
+        ];
+        let table = format_table(&rows, &fields);
+        assert!(
+            table.contains("SMART"),
+            "multi-word field rendered blank: {}",
+            table
+        );
+    }
+
+    #[test]
+    fn test_format_csv_renders_multi_word_fields() {
+        let rows = vec![serde_json::json!({"metrics": {"costMicros": "13100000"}})];
+        let fields = vec!["metrics.cost_micros".to_string()];
+        let csv = format_csv(&rows, &fields);
+        assert!(
+            csv.contains("13100000"),
+            "multi-word field rendered blank: {}",
+            csv
+        );
     }
 }

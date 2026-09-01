@@ -115,6 +115,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `run_gaql` no longer renders blank cells for every multi-word field in `table`
+  and `csv` output. The formatter resolved the GAQL field path literally against
+  the response, but GAQL names fields in snake_case while the REST API answers in
+  camelCase — so `geo_target_constant.canonical_name` was looked up as
+  `geo_target_constant` → `canonical_name` against a body keyed
+  `geoTargetConstant` → `canonicalName`, and missed. Only single-word segments
+  ever matched, which is why `campaign.id` and `campaign.name` worked and hid the
+  bug; `campaign.advertising_channel_type`, `campaign_budget.amount_micros` and
+  `metrics.cost_micros` all silently rendered empty. A blank column reads as "no
+  data" rather than as a lookup miss, so this quietly misreported live accounts —
+  a SMART campaign showed an empty channel type and looked like it had none.
+  Both spellings are now tried, literal first. The existing tests only covered
+  `campaign.id` / `campaign.name`, so the regression tests added here use
+  multi-word fields specifically.
+
 - `search_geo_targets` no longer returns nothing for accented place names.
   The query went into a `LIKE` clause verbatim, and Google stores every
   `geo_target_constant.name` unaccented, so `São Benedito` and `Ceará` each
