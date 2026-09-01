@@ -163,7 +163,7 @@ All configuration is via environment variables. No config files.
 
 ## Tools
 
-### Read (19 tools)
+### Read (20 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -178,7 +178,8 @@ All configuration is via environment variables. No config files.
 | `list_negative_keyword_lists` | List negative keyword lists (shared sets) and the campaigns each is attached to |
 | `get_negative_keyword_list` | Keywords inside one negative keyword list, with criterion IDs |
 | `run_gaql` | Execute arbitrary GAQL queries (json/table/csv) |
-| `search_geo_targets` | Find location IDs for geo-targeting |
+| `search_geo_targets` | Find location IDs for geo-targeting (accent-insensitive) |
+| `get_proximity_targets` | List a campaign's radius targets with their criterion IDs |
 | `get_geo_performance` | Performance breakdown by location |
 | `list_recommendations` | Active Google Ads recommendations |
 | `list_extensions` | List campaign extensions (sitelinks, callouts, snippets) |
@@ -187,7 +188,7 @@ All configuration is via environment variables. No config files.
 | `get_policy_issues` | Disapproved or limited ads and policy violations |
 | `get_conversion_actions` | Conversion actions configured in the account |
 
-### Write (39 tools)
+### Write (41 tools)
 
 All write tools return a preview. Call `confirm_and_apply` with `dry_run=false` to execute.
 
@@ -198,6 +199,8 @@ All write tools return a preview. Call `confirm_and_apply` with `dry_run=false` 
 | `exclude_geo_target` | Exclude a location from a campaign (negative location criterion) |
 | `remove_geo_target` | Remove a positively-targeted location from a campaign (destructive) |
 | `set_campaign_geo_target_type` | Set a campaign's geo target type (`PRESENCE` vs `PRESENCE_OR_INTEREST`) for positive and/or negative targeting |
+| `add_proximity_targets` | Add radius targets around a point — one criterion per radius, created atomically |
+| `remove_proximity_target` | Remove one radius target (destructive) |
 | `draft_responsive_search_ad` | Create RSA (3-15 headlines, 2-4 descriptions). Defaults to PAUSED; pass `status: "ENABLED"` to opt out. |
 | `update_responsive_search_ad` | Edit an existing RSA in place — headlines, descriptions, final URL, display paths. Only the fields provided are written; preserves the ad's ID and asset performance history, unlike remove + re-create. |
 | `create_ad_group` | Create ad group in existing campaign. Defaults to PAUSED; pass `status: "ENABLED"` to opt out. |

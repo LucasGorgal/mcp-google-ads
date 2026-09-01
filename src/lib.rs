@@ -305,6 +305,51 @@ pub struct RemoveGeoTargetToolParams {
     pub geo_target_id: String,
 }
 
+/// Parameters for adding radius (proximity) targets to a campaign.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddProximityTargetsToolParams {
+    /// Customer ID (e.g. 123-456-7890). Defaults to configured customer_id.
+    pub customer_id: Option<String>,
+    /// The campaign ID to add the radius targets to.
+    pub campaign_id: String,
+    /// Centre latitude in decimal degrees (-90 to 90), as Google Maps shows it.
+    pub latitude: f64,
+    /// Centre longitude in decimal degrees (-180 to 180).
+    pub longitude: f64,
+    /// One radius per ring, e.g. `[1.0, 3.0, 5.0, 10.0]`. Each becomes its own
+    /// criterion so bids can be tuned per distance band later. Bounds are
+    /// 1–800 km or 1–500 miles; Google rejects anything outside.
+    pub radii: Vec<f64>,
+    /// KILOMETERS (default) or MILES.
+    pub radius_units: Option<models::ProximityRadiusUnits>,
+    /// Optional bid modifier applied to every ring created here (0.1 to 10.0).
+    pub bid_modifier: Option<f64>,
+}
+
+/// Parameters for listing radius (proximity) targets.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetProximityTargetsToolParams {
+    /// Customer ID (e.g. 123-456-7890). Defaults to configured customer_id.
+    pub customer_id: Option<String>,
+    /// Restrict to one campaign. Omit to list every radius target in the account.
+    pub campaign_id: Option<String>,
+}
+
+/// Parameters for removing one radius (proximity) target.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveProximityTargetToolParams {
+    /// Customer ID (e.g. 123-456-7890). Defaults to configured customer_id.
+    pub customer_id: Option<String>,
+    /// The campaign ID the radius target belongs to.
+    pub campaign_id: String,
+    /// Criterion ID of the ring to remove, from get_proximity_targets. Google
+    /// assigns it, so unlike a location criterion it cannot be derived.
+    pub criterion_id: String,
+}
+
 /// Parameters for excluding demographic tiers from ad groups.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1517,6 +1562,75 @@ impl GoogleAdsMcp {
             &params.campaign_id,
             params.positive_geo_target_type,
             params.negative_geo_target_type,
+        ) {
+            Ok(preview) => preview.to_string(),
+            Err(e) => e.to_json().to_string(),
+        }
+    }
+
+    // ── Proximity (radius) targeting ─────────────────────────────────────
+
+    #[tool(
+        description = "Add radius (proximity) targets to a campaign — the \"X km around this address\" targeting the Google Ads UI offers. Google has no radius field on a campaign: each ring is its own PROXIMITY campaign criterion, so pass several radii (e.g. [1,3,5,10]) to create the overlapping rings that let bids be tuned per distance band later. All rings are created in ONE atomic mutate. latitude/longitude are decimal degrees. Bounds: 1-800 km or 1-500 miles. Returns a preview — call confirm_and_apply to execute."
+    )]
+    async fn add_proximity_targets(
+        &self,
+        Parameters(params): Parameters<AddProximityTargetsToolParams>,
+    ) -> String {
+        if let Some(err) = self.check_write_allowed() {
+            return err;
+        }
+        let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let config = self.config.clone();
+
+        match tools::geo::add_proximity_targets(
+            &config,
+            &cid,
+            &params.campaign_id,
+            params.latitude,
+            params.longitude,
+            &params.radii,
+            params.radius_units.unwrap_or_default(),
+            params.bid_modifier,
+        ) {
+            Ok(preview) => preview.to_string(),
+            Err(e) => e.to_json().to_string(),
+        }
+    }
+
+    #[tool(
+        description = "List radius (proximity) targets on a campaign, or across the account. Returns each ring's criterion_id — which remove_proximity_target needs and which cannot be derived, since Google assigns it — plus radius, units, centre coordinates and bid modifier."
+    )]
+    async fn get_proximity_targets(
+        &self,
+        Parameters(params): Parameters<GetProximityTargetsToolParams>,
+    ) -> String {
+        let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let campaign_id = params.campaign_id.clone();
+        self.run_tool(|client| async move {
+            tools::geo::get_proximity_targets(&client, &cid, campaign_id.as_deref()).await
+        })
+        .await
+    }
+
+    #[tool(
+        description = "Remove one radius (proximity) target from a campaign. criterion_id comes from get_proximity_targets. Requires double confirmation: dropping a ring changes where the campaign serves and stays invisible in reporting until the spend pattern shifts. Returns a preview — call confirm_and_apply to execute."
+    )]
+    async fn remove_proximity_target(
+        &self,
+        Parameters(params): Parameters<RemoveProximityTargetToolParams>,
+    ) -> String {
+        if let Some(err) = self.check_write_allowed() {
+            return err;
+        }
+        let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let config = self.config.clone();
+
+        match tools::geo::remove_proximity_target(
+            &config,
+            &cid,
+            &params.campaign_id,
+            &params.criterion_id,
         ) {
             Ok(preview) => preview.to_string(),
             Err(e) => e.to_json().to_string(),

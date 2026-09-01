@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Radius (proximity) targeting is now reachable from the server:
+  `add_proximity_targets`, `get_proximity_targets` and
+  `remove_proximity_target`. The "X km around this address" targeting the
+  Google Ads UI offers had no tool at all — `draft_campaign` accepts only
+  `geo_target_ids`, which are city-level constants — so every campaign built
+  through this server silently skipped it, and the gap was being closed by
+  hand-rolled REST calls against the same credentials.
+
+  Google has no radius *field* on a campaign: each ring is its own `PROXIMITY`
+  campaign criterion. `add_proximity_targets` therefore takes a list of radii
+  and writes one criterion per ring in **one atomic mutate** — a partially
+  applied set reads as complete targeting while leaving the outer bands
+  uncovered. Overlapping rings are the point rather than an accident: separate
+  criteria are what allow a bid modifier per distance band later.
+
+  Bounds are enforced client-side against what the live v25 API actually
+  accepts, probed with `validateOnly`: **1–800 kilometres, 1–500 miles**
+  (0.99 km and 801 km both answer `INVALID_PROXIMITY_RADIUS`), and a bid
+  modifier of 0.1–10.0 (0.0 answers `TOO_LOW`, 10.1 `TOO_HIGH`). Note the
+  minimum is a whole 1 in both units, so the tight "walking distance" radius
+  some advertisers reach for does not exist. `radiusUnits` is required by the
+  API — omitting it fails `fieldError: REQUIRED` — so the enum has no "unset"
+  state and defaults to `KILOMETERS`.
+
+  Coordinates are taken as decimal degrees, the form Google Maps shows, and
+  converted to the micro degrees the API stores; `get_proximity_targets`
+  converts them back. Duplicate radii are dropped and the count reported as
+  `duplicates_dropped`, since two identical rings are two criteria covering the
+  same ground.
+
+  `get_proximity_targets` exists because a proximity criterion ID is **assigned
+  by Google**, unlike a location criterion whose ID equals its geo target
+  constant. It cannot be constructed by hand, so there was no way to address an
+  existing ring for removal. `remove_proximity_target` is
+  `requires_double_confirm`: dropping a ring changes where the campaign serves
+  and stays invisible in reporting until the spend pattern shifts.
+
 ### Fixed
 
 - `search_geo_targets` no longer returns nothing for accented place names.
