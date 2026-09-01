@@ -7,6 +7,43 @@ set -euo pipefail
 
 CREDENTIALS_FILE="${1:-$HOME/.mcp-google-ads/credentials.json}"
 
+# Find a Python that actually runs. Do not trust the name alone: a pyenv shim
+# with no version selected exits 0 and prints its error to stdout, which would
+# otherwise be captured as if it were real output.
+PY=""
+for CANDIDATE in "${PYTHON:-}" python3 python "py -3"; do
+    [ -n "$CANDIDATE" ] || continue
+    OUT=$($CANDIDATE -c 'import json,sys; sys.stdout.write("PYOK")' 2>/dev/null) || continue
+    if [ "$OUT" = "PYOK" ]; then
+        PY="$CANDIDATE"
+        break
+    fi
+done
+
+if [ -z "$PY" ]; then
+    echo "ERROR: No working Python 3 interpreter found."
+    echo "Tried: python3, python, py -3"
+    echo ""
+    echo "If you use pyenv, no version is currently selected. Either:"
+    echo "  pyenv global 3.12.0     # or any installed version (pyenv versions)"
+    echo "or point this script at a specific interpreter:"
+    echo "  PYTHON=/c/Python312/python $0 $*"
+    exit 1
+fi
+
+echo "Using Python: $PY"
+
+# Under MSYS/Git Bash the shell accepts /c/Users/... but a native Windows
+# python.exe cannot open that form, so bash's own -f test passes and Python
+# then fails. cygpath -m yields C:/Users/... which works for both.
+to_py_path() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -m "$1"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 if [ ! -f "$CREDENTIALS_FILE" ]; then
     echo "ERROR: credentials file not found at $CREDENTIALS_FILE"
     echo "Usage: $0 [path/to/credentials.json]"
@@ -21,10 +58,12 @@ if [ ! -f "$CREDENTIALS_FILE" ]; then
     exit 1
 fi
 
+CREDENTIALS_FILE_PY=$(to_py_path "$CREDENTIALS_FILE")
+
 # Detect credential type
-CRED_TYPE=$(python3 -c "
-import json, sys
-d = json.load(open('$CREDENTIALS_FILE'))
+CRED_TYPE=$(CRED_PATH="$CREDENTIALS_FILE_PY" $PY -c "
+import json, os, sys
+d = json.load(open(os.environ['CRED_PATH']))
 if 'installed' in d:
     print('installed')
 elif 'web' in d:
@@ -67,8 +106,8 @@ if [ "$CRED_TYPE" = "authorized_user" ]; then
     exit 0
 fi
 
-CLIENT_ID=$(python3 -c "import json; d=json.load(open('$CREDENTIALS_FILE')); print(d.get('installed',d.get('web',{})).get('client_id',''))")
-CLIENT_SECRET=$(python3 -c "import json; d=json.load(open('$CREDENTIALS_FILE')); print(d.get('installed',d.get('web',{})).get('client_secret',''))")
+CLIENT_ID=$(CRED_PATH="$CREDENTIALS_FILE_PY" $PY -c "import json,os; d=json.load(open(os.environ['CRED_PATH'])); print(d.get('installed',d.get('web',{})).get('client_id',''))")
+CLIENT_SECRET=$(CRED_PATH="$CREDENTIALS_FILE_PY" $PY -c "import json,os; d=json.load(open(os.environ['CRED_PATH'])); print(d.get('installed',d.get('web',{})).get('client_secret',''))")
 
 if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
     echo "ERROR: Could not extract client_id/client_secret from $CREDENTIALS_FILE"
@@ -100,7 +139,7 @@ echo "2. Waiting for OAuth2 callback on http://localhost:${PORT} ..."
 echo ""
 
 # Start a minimal HTTP server to capture the auth code
-AUTH_CODE=$(python3 -c "
+AUTH_CODE=$($PY -c "
 import http.server
 import urllib.parse
 import sys
@@ -156,9 +195,31 @@ RESPONSE=$(curl -s -X POST "https://oauth2.googleapis.com/token" \
     -d "redirect_uri=${REDIRECT_URI}" \
     -d "grant_type=authorization_code")
 
-REFRESH_TOKEN=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('refresh_token',''))" 2>/dev/null)
+TOKEN_FILE="$HOME/.mcp-google-ads/token.json"
+mkdir -p "$(dirname "$TOKEN_FILE")"
 
-if [ -z "$REFRESH_TOKEN" ]; then
+# Extract and write in one step, with json.dump doing the encoding. Never
+# interpolate the token into shell-quoted JSON: a malformed value silently
+# produced an unparseable token.json that only failed later, at API call time.
+TOKEN_FILE_PY=$(to_py_path "$TOKEN_FILE")
+
+if ! printf '%s' "$RESPONSE" | TOKEN_PATH="$TOKEN_FILE_PY" $PY -c "
+import sys, os, json
+try:
+    resp = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.stderr.write('Token endpoint did not return JSON.\n')
+    sys.exit(1)
+
+token = resp.get('refresh_token')
+if not token:
+    sys.stderr.write('No refresh_token in response: %s\n' % json.dumps(resp))
+    sys.exit(1)
+
+with open(os.environ['TOKEN_PATH'], 'w') as f:
+    json.dump({'refresh_token': token}, f)
+    f.write('\n')
+"; then
     echo ""
     echo "ERROR: Failed to get refresh token. Response:"
     echo "$RESPONSE"
@@ -170,10 +231,14 @@ if [ -z "$REFRESH_TOKEN" ]; then
     exit 1
 fi
 
-TOKEN_FILE="$HOME/.mcp-google-ads/token.json"
-mkdir -p "$(dirname "$TOKEN_FILE")"
-echo "{\"refresh_token\": \"$REFRESH_TOKEN\"}" > "$TOKEN_FILE"
 chmod 600 "$TOKEN_FILE"
+
+# Prove the file we just wrote is loadable before claiming success.
+TOKEN_PATH="$TOKEN_FILE_PY" $PY -c "
+import json, os, sys
+d = json.load(open(os.environ['TOKEN_PATH']))
+assert d.get('refresh_token'), 'refresh_token missing or empty'
+" || { echo "ERROR: wrote $TOKEN_FILE but it is not valid. Aborting."; exit 1; }
 
 echo ""
 echo "=== SUCCESS ==="
