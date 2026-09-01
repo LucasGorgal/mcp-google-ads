@@ -128,7 +128,9 @@ Add to `~/.claude/settings.json`:
         "GOOGLE_ADS_DEVELOPER_TOKEN": "your-developer-token",
         "GOOGLE_ADS_CUSTOMER_ID": "123-456-7890",
         "GOOGLE_ADS_CREDENTIALS_PATH": "~/.mcp-google-ads/credentials.json",
-        "GOOGLE_ADS_TOKEN_PATH": "~/.mcp-google-ads/token.json"
+        "GOOGLE_ADS_TOKEN_PATH": "~/.mcp-google-ads/token.json",
+        "GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE": "en",
+        "GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS": "2840"
       }
     }
   }
@@ -148,6 +150,8 @@ All configuration is via environment variables. No config files.
 | `GOOGLE_ADS_CREDENTIALS_PATH` | `~/.mcp-google-ads/credentials.json` | OAuth2 credentials JSON |
 | `GOOGLE_ADS_TOKEN_PATH` | `~/.mcp-google-ads/token.json` | Refresh token JSON |
 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | | MCC manager account ID (optional) |
+| `GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE` | `en` | Keyword Planner language: ISO code (`pt`, `es`, `zh_CN`) or constant ID (`1014`) |
+| `GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS` | | Keyword Planner geo target IDs, comma-separated (e.g. `2076` for Brazil). Empty = worldwide |
 | `GOOGLE_ADS_MAX_DAILY_BUDGET` | `50.0` | Maximum daily budget allowed per campaign |
 | `GOOGLE_ADS_MAX_BID_INCREASE_PCT` | `100` | Maximum bid increase percentage |
 | `GOOGLE_ADS_REQUIRE_DRY_RUN` | `true` | Default dry_run to true on confirm_and_apply |
@@ -179,7 +183,7 @@ All configuration is via environment variables. No config files.
 | `list_recommendations` | Active Google Ads recommendations |
 | `list_extensions` | List campaign extensions (sitelinks, callouts, snippets) |
 | `discover_keywords` | Keyword ideas from seed keywords (Keyword Planner) |
-| `get_keyword_forecasts` | Historical keyword metrics for forecasting |
+| `get_keyword_forecasts` | Keyword Planner search volume, competition and top-of-page bids for specific keywords |
 | `get_policy_issues` | Disapproved or limited ads and policy violations |
 | `get_conversion_actions` | Conversion actions configured in the account |
 

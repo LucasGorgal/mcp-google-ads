@@ -62,6 +62,7 @@ fn test_config() -> Config {
             developer_token,
             customer_id,
             login_customer_id,
+            ..Default::default()
         },
         safety: mcp_google_ads::config::SafetyConfig::default(),
         read_only: false,

@@ -5,6 +5,45 @@ All notable changes to `mcp-google-ads` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Keyword Planner is no longer hardwired to English and worldwide volumes.
+  `discover_keywords` sent `languageConstants/1000` on every request and never
+  sent a geo target at all. Keyword Planner matches ideas against the requested
+  language, so a Portuguese seed under the English constant comes back with the
+  seed keyword and nothing else — the tool returned one row and looked like it
+  had simply found no ideas, rather than like it had been asked the wrong
+  question. Verified live: `curso preparatório enem` returns 1 result under the
+  English constant and 20 under Portuguese with `geoTargetConstants/2076`.
+  Both Keyword Planner tools now take `language` and `geo_target_ids` per call,
+  defaulting to `GOOGLE_ADS_KEYWORD_PLAN_LANGUAGE` (default `en`) and
+  `GOOGLE_ADS_KEYWORD_PLAN_GEO_TARGETS` (default empty, i.e. worldwide), so an
+  account that always works in one market configures it once. `language`
+  accepts an ISO code (`pt`, `pt-BR`, `zh_CN`) or a raw constant ID; the code
+  table is the live `language_constant` list, not a hand-written guess. An
+  unknown code is a validation error listing the accepted codes rather than a
+  silent fallback to English — silence is what made the original bug invisible.
+  `health_check` now reports both settings, since a wrong language produces
+  plausible-looking output rather than an error.
+
+- `get_keyword_forecasts` now reads Google's keyword database instead of the
+  account's own history. It ran a `keyword_view` report filtered to keywords
+  already present in an ad group, so for any keyword not yet running — which is
+  every keyword worth forecasting — it returned `"No matching keywords found in
+  the account"`. That reads as "no search volume" and is the opposite of what
+  the tool is for. It now calls `generateKeywordHistoricalMetrics`, returning
+  search volume, competition and top-of-page bid range for arbitrary keywords.
+
+- Keyword Planner responses are flattened before they are returned. The raw
+  payload carries twelve `monthlySearchVolumes` entries per keyword — about
+  700 bytes of noise per idea, ~35 KB for a 50-idea request — burying the four
+  fields a decision actually turns on. Rows are now `keyword`,
+  `avg_monthly_searches`, `competition`, `competition_index` and the
+  top-of-page bid range converted from micros to currency units. The monthly
+  trend is available behind `include_monthly_trend`.
+
 ## [0.13.0] - 2026-08-24
 
 ### Added
