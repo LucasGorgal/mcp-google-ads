@@ -864,6 +864,7 @@ dependencies = [
 name = "mcp-google-ads"
 version = "0.13.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dirs",
  "proptest",

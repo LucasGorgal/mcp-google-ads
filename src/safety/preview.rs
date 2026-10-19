@@ -12,6 +12,8 @@ use crate::models::{AdStatus, NextActionHint};
 /// - `MutateOperations` (default) -> POST `/v25/customers/{cid}/googleAds:mutate`
 /// - `ApplyRecommendation` -> POST `/v25/customers/{cid}/recommendations:apply`
 /// - `DismissRecommendation` -> POST `/v25/customers/{cid}/recommendations:dismiss`
+/// - `ServiceMutate` -> POST `/v25/customers/{cid}/{service}:mutate`
+/// - `YouTubeVideoUpload` -> resumable upload to `youTubeVideoUploads:create`
 ///
 /// The recommendation variants exist because `applyRecommendationOperation` and
 /// `dismissRecommendationOperation` are NOT valid `MutateOperation` keys in
@@ -33,6 +35,14 @@ pub enum PlanDispatch {
     DismissRecommendation {
         /// Full resource name(s): `customers/{cid}/recommendations/{rec_id}`.
         resource_names: Vec<String>,
+    },
+    /// POST `/v25/customers/{cid}/{service}:mutate` with `mutate_operations`
+    /// as the service's own operations (e.g. `customAudiences`).
+    ServiceMutate { service: String },
+    /// Resumable upload of a local video to YouTube through
+    /// `youTubeVideoUploads:create`. Carries no mutate operations.
+    YouTubeVideoUpload {
+        upload: crate::client::YouTubeVideoUploadRequest,
     },
 }
 

@@ -119,6 +119,38 @@ async fn apply_plan(
         PlanDispatch::DismissRecommendation { resource_names } => {
             dismiss_recommendation_dispatch(client, plan, resource_names).await
         }
+        PlanDispatch::ServiceMutate { service } => client
+            .service_mutate(&plan.customer_id, service, &plan.mutate_operations, false)
+            .await
+            .map(|response| {
+                json!({
+                    "status": "APPLIED",
+                    "service": service,
+                    "results": response.get("results").cloned().unwrap_or(json!([])),
+                })
+            }),
+        PlanDispatch::YouTubeVideoUpload { upload } => client
+            .upload_youtube_video(&plan.customer_id, upload)
+            .await
+            .map(|response| {
+                let resource_name = response
+                    .get("resourceName")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                json!({
+                    "status": "UPLOADED",
+                    "upload": response,
+                    "next_step": format!(
+                        "YouTube processes the video for a few minutes. Poll with run_gaql: \
+                         SELECT you_tube_video_upload.video_id, you_tube_video_upload.state \
+                         FROM you_tube_video_upload WHERE you_tube_video_upload.resource_name = '{}'. \
+                         Once state is PROCESSED, create the asset with draft_mutate: \
+                         assetOperation.create {{name, youtubeVideoAsset: {{youtubeVideoId}}}}.",
+                        resource_name
+                    ),
+                })
+            }),
     };
 
     match dispatch_result {

@@ -5,6 +5,55 @@ use crate::error::{McpGoogleAdsError, Result};
 use crate::safety::guards::check_blocked_operation;
 use crate::safety::preview::{store_plan, ChangePlan};
 
+/// Largest image file `resolve_image_data` reads (Google's own cap is 5 MB).
+const MAX_IMAGE_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// The base64 payload for `upload_image_asset`, from inline data or a file.
+///
+/// Exactly one source must be given. A file is read and encoded here so a
+/// logo or banner never has to travel as a megabyte of base64 in a tool call.
+pub fn resolve_image_data(
+    image_data_base64: Option<&str>,
+    image_file_path: Option<&str>,
+) -> Result<String> {
+    use base64::Engine as _;
+
+    let inline = image_data_base64.map(str::trim).filter(|d| !d.is_empty());
+    let path = image_file_path.map(str::trim).filter(|p| !p.is_empty());
+    match (inline, path) {
+        (Some(_), Some(_)) => Err(McpGoogleAdsError::Validation(
+            "Give image_data_base64 or image_file_path, not both".to_string(),
+        )),
+        (None, None) => Err(McpGoogleAdsError::Validation(
+            "Give image_data_base64 or image_file_path".to_string(),
+        )),
+        (Some(data), None) => Ok(data.to_string()),
+        (None, Some(path)) => {
+            let extension = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_lowercase)
+                .unwrap_or_default();
+            if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif") {
+                return Err(McpGoogleAdsError::Validation(format!(
+                    "'{path}' is not a PNG, JPEG or GIF"
+                )));
+            }
+            let size = std::fs::metadata(path)
+                .map_err(|e| McpGoogleAdsError::Validation(format!("Cannot read '{path}': {e}")))?
+                .len();
+            if size == 0 || size > MAX_IMAGE_FILE_BYTES {
+                return Err(McpGoogleAdsError::Validation(format!(
+                    "'{path}' is {size} bytes; images must be between 1 byte and 5 MB"
+                )));
+            }
+            let bytes = std::fs::read(path)
+                .map_err(|e| McpGoogleAdsError::Validation(format!("Cannot read '{path}': {e}")))?;
+            Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+        }
+    }
+}
+
 /// Upload an image asset.
 ///
 /// `image_data_base64` is the base64-encoded image data.

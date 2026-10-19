@@ -698,8 +698,51 @@ pub struct UploadImageAssetToolParams {
     pub customer_id: Option<String>,
     /// Name for the asset.
     pub asset_name: String,
-    /// Base64-encoded image data.
-    pub image_data_base64: String,
+    /// Base64-encoded image data. Give this or `image_file_path`, not both.
+    pub image_data_base64: Option<String>,
+    /// Path of a local PNG, JPEG or GIF to upload instead of inline base64
+    /// (keeps large images out of the tool call).
+    pub image_file_path: Option<String>,
+}
+
+/// Parameters for a hand-built mutate (`draft_mutate`).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftMutateToolParams {
+    /// Customer ID (e.g. 123-456-7890). Defaults to configured customer_id.
+    pub customer_id: Option<String>,
+    /// One line saying what the plan does; shown in the preview and written to the audit log.
+    pub description: String,
+    /// Operations in the Google Ads REST JSON shape (camelCase). Without `service`: one
+    /// MutateOperation per entry for googleAds:mutate, e.g.
+    /// {"campaignOperation": {"create": {...}}}; temporary negative IDs
+    /// (customers/{cid}/campaigns/-2) link entities created in the same plan.
+    /// With `service`: that service's own operations, e.g. {"create": {...}}.
+    pub operations: Vec<serde_json::Value>,
+    /// Service with its own :mutate RPC instead of googleAds:mutate. Allowed: customAudiences.
+    pub service: Option<String>,
+    /// Have Google validate the whole request (validateOnly, nothing written) before the
+    /// plan is stored; the verdict comes back as `api_validation`. Default true.
+    pub validate: Option<bool>,
+}
+
+/// Parameters for uploading a local video to YouTube through the Ads API.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DraftYouTubeVideoUploadToolParams {
+    /// Customer ID (e.g. 123-456-7890). Defaults to configured customer_id.
+    pub customer_id: Option<String>,
+    /// Absolute path of the local video file (mp4, mov, webm, ...).
+    pub file_path: String,
+    /// YouTube title, up to 100 characters.
+    pub video_title: String,
+    /// YouTube description, up to 5000 characters.
+    pub video_description: Option<String>,
+    /// UNLISTED (default, and the only option without channel_id), PUBLIC or PRIVATE.
+    pub video_privacy: Option<String>,
+    /// YouTube brand channel ID linked to the account. Omit to upload to the
+    /// Google-managed channel linked to the Google Ads account.
+    pub channel_id: Option<String>,
 }
 
 /// Parameters for uploading a text asset.
@@ -893,7 +936,7 @@ impl GoogleAdsMcp {
     // ── Accounts ────────────────────────────────────────────────────────
 
     #[tool(
-        description = "List all accessible Google Ads accounts. If a Manager (MCC) account is configured, lists all sub-accounts."
+        description = "List all accessible Google Ads accounts. If a Manager (MCC) account is configured, lists all sub-accounts, plus (under direct_access_accounts) accounts the login was invited to directly without any manager link; pass their customer_id explicitly to the other tools."
     )]
     async fn list_accounts(&self) -> String {
         let customer_id = self.resolve_mcc_or_customer_id();
@@ -2068,15 +2111,112 @@ impl GoogleAdsMcp {
         let cid = self.resolve_customer_id(params.customer_id.as_deref());
         let config = self.config.clone();
 
+        let image_data_base64 = match tools::assets::resolve_image_data(
+            params.image_data_base64.as_deref(),
+            params.image_file_path.as_deref(),
+        ) {
+            Ok(data) => data,
+            Err(e) => return e.to_json().to_string(),
+        };
+
         match tools::assets::upload_image_asset(
             &config,
             &cid,
             &params.asset_name,
-            &params.image_data_base64,
+            &image_data_base64,
         ) {
             Ok(preview) => preview.to_string(),
             Err(e) => e.to_json().to_string(),
         }
+    }
+
+    #[tool(
+        description = "Upload a local video file to YouTube through the Google Ads API (YouTubeVideoUploadService), so video ads can use it. Without channel_id it goes UNLISTED to the Google-managed channel linked to the account. Returns a preview; confirm_and_apply runs the upload. Then poll run_gaql on you_tube_video_upload until state = PROCESSED to read video_id, and create a YOUTUBE_VIDEO asset with draft_mutate."
+    )]
+    async fn draft_youtube_video_upload(
+        &self,
+        Parameters(params): Parameters<DraftYouTubeVideoUploadToolParams>,
+    ) -> String {
+        if let Some(err) = self.check_write_allowed() {
+            return err;
+        }
+        let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let config = self.config.clone();
+
+        match tools::youtube::draft_youtube_video_upload(
+            &config,
+            &cid,
+            &params.file_path,
+            &params.video_title,
+            params.video_description.as_deref(),
+            params.video_privacy.as_deref(),
+            params.channel_id.as_deref(),
+        ) {
+            Ok(preview) => preview.to_string(),
+            Err(e) => e.to_json().to_string(),
+        }
+    }
+
+    #[tool(
+        description = "Draft hand-built Google Ads mutate operations (REST JSON, camelCase) for anything the purpose-built tools do not model, such as Demand Gen campaigns, ad groups with channel controls, Audience resources, Demand Gen video ads, YouTube video assets or call-to-action assets. With service='customAudiences' the operations go to customAudiences:mutate (custom segments). By default Google validates the whole request first (validateOnly) and the verdict is returned as api_validation. Guards: whitelisted operation keys only, budget cap, and requires_double_confirm when the plan can start delivery (a campaign set ENABLED, or an ad group/ad/criterion ENABLED under an existing parent) or removes anything. Returns a preview; call confirm_and_apply to execute."
+    )]
+    async fn draft_mutate(&self, Parameters(params): Parameters<DraftMutateToolParams>) -> String {
+        if let Some(err) = self.check_write_allowed() {
+            return err;
+        }
+        let cid = self.resolve_customer_id(params.customer_id.as_deref());
+        let config = self.config.clone();
+
+        let (plan, _summary) = match tools::raw_mutate::build_raw_mutate_plan(
+            &config,
+            &cid,
+            &params.description,
+            params.service.as_deref(),
+            params.operations,
+        ) {
+            Ok(built) => built,
+            Err(e) => return e.to_json().to_string(),
+        };
+
+        let api_validation = if params.validate.unwrap_or(true) {
+            let client = match GoogleAdsClient::new(&config) {
+                Ok(c) => c,
+                Err(e) => return e.to_json().to_string(),
+            };
+            let verdict = match &plan.dispatch {
+                safety::preview::PlanDispatch::ServiceMutate { service } => client
+                    .service_mutate(&plan.customer_id, service, &plan.mutate_operations, true)
+                    .await
+                    .map(|_| ()),
+                _ => client
+                    .mutate_validate_only(
+                        &plan.customer_id,
+                        plan.mutate_operations
+                            .iter()
+                            .map(|op| client::MutateOperation {
+                                operation: op.clone(),
+                            })
+                            .collect(),
+                    )
+                    .await
+                    .map(|_| ()),
+            };
+            match verdict {
+                Ok(()) => serde_json::json!({ "ok": true }),
+                Err(e) => {
+                    let mut out = error_response(&e);
+                    out["ok"] = serde_json::json!(false);
+                    out
+                }
+            }
+        } else {
+            serde_json::json!({ "ok": null, "note": "not validated (validate=false)" })
+        };
+
+        let mut preview = plan.to_preview();
+        preview["api_validation"] = api_validation;
+        safety::preview::store_plan(plan);
+        preview.to_string()
     }
 
     #[tool(description = "Upload a reusable text asset. Returns a preview.")]
